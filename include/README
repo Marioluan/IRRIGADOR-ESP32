@@ -1,0 +1,39 @@
+# IRRIGADOR-ESP32
+
+Projeto de irrigação automatizada utilizando ESP32.
+
+## Objetivo
+
+Criar um sistema de irrigação que ligue e desligue uma válvula automaticamente em horários definidos.
+
+Futuramente, os horários serão configurados remotamente através do ThingsBoard.
+
+## Funcionamento atual
+
+O ESP32:
+
+- conecta ao Wi-Fi;
+- obtém a hora atual pela internet usando NTP;
+- compara a hora atual com horários de irrigação configurados;
+- aciona um relé através do GPIO 26;
+- o relé controla a válvula de irrigação.
+
+## Componentes
+
+- ESP32 DevKit V1
+- Relé
+- Transistor 2N2222
+- Resistores
+- LED para simular a válvula
+- Válvula solenoide de baixa tensão futuramente
+
+## Estrutura do projeto
+
+```text
+IRRIGADOR-ESP32/
+├── src/
+│   └── main.cpp
+├── platformio.ini
+├── diagram.json
+├── wokwi.toml
+└── README.md
