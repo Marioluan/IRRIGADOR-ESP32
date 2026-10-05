@@ -40,6 +40,9 @@ bool ledOnline = false;
 bool ligado = false;
 bool manualAtivo = false;
 bool estadoBotaoAnterior = LOW;
+bool configuracaoRecebida = false;
+
+void enviarestadoControle();
 
 // -------- CONVERSÃO DE HORÁRIOS --------
 
@@ -94,6 +97,8 @@ bool interpretarPeriodos(JsonVariantConst valor) {
 
         valor = documentoTexto.as<JsonVariantConst>();
     }
+
+    configuracaoRecebida = true;
 
     if (!valor.is<JsonArrayConst>()) {
         Serial.println("Periodos deve ser uma lista.");
@@ -168,16 +173,40 @@ bool interpretarPeriodos(JsonVariantConst valor) {
 
 // -------- RECEBIMENTO MQTT --------
 
-void receberMensagem(char* topico, byte* payload, unsigned int tamanho) 
+void enviarEstadoControle() {
+
+    String mensagem = "{\"manualAtivo\":";
+    mensagem += manualAtivo ? "true" : "false";
+
+    mensagem += ",\"ligado\":";
+    mensagem += ligado ? "true" : "false";
+
+    mensagem += "}";
+
+    bool sucesso = mqtt.publish(
+        "v1/devices/me/attributes",
+        mensagem.c_str()
+    );
+
+    Serial.print("Estado enviado: ");
+    Serial.println(mensagem);
+
+    Serial.print("Publish: ");
+    Serial.println(
+        sucesso ? "OK" : "FALHOU"
+    );
+}
+
+void receberMensagem(char* topico, byte* payload, unsigned int tamanho)
 {
     Serial.println("=== MQTT RECEBIDO ===");
 
-Serial.print("Topico: ");
-Serial.println(topico);
+    Serial.print("Topico: ");
+    Serial.println(topico);
 
-Serial.print("Mensagem: ");
-Serial.write(payload, tamanho);
-Serial.println();
+    Serial.print("Mensagem: ");
+    Serial.write(payload, tamanho);
+    Serial.println();
 
     JsonDocument documento;
 
@@ -192,94 +221,146 @@ Serial.println();
         return;
     }
 
-   // =========================
+    // =========================
     // VERIFICA SE É UM RPC
     // =========================
 
-const char* metodo = documento["method"];
+    const char* metodo = documento["method"];
 
-if (metodo != nullptr) {
+    if (metodo != nullptr) {
 
-    // =========================
-    // MODO MANUAL
-    // =========================
+        // =========================
+        // MODO MANUAL
+        // =========================
 
-    if (strcmp(metodo, "modoManual") == 0) {
+        if (strcmp(metodo, "modoManual") == 0) {
 
-        manualAtivo = true;
+            manualAtivo = true;
 
-        Serial.println("RPC: modo manual ativado");
-
-        enviarEstadoControle();
-
-        return;
-    }
-
-
-    // =========================
-    // MODO AUTOMÁTICO
-    // =========================
-
-    if (strcmp(metodo, "modoAutomatico") == 0) {
-
-        manualAtivo = false;
-
-        Serial.println("RPC: modo automatico ativado");
-
-        enviarEstadoControle();
-
-        return;
-    }
-
-
-    // =========================
-    // LIGA/DESLIGA VÁLVULA
-    // =========================
-
-    if (strcmp(metodo, "toggleValvula") == 0) {
-
-        if (manualAtivo && !travado) {
-
-            ligado = !ligado;
-
-            Serial.println(
-                ligado
-                ? "RPC: VALVULA LIGADA"
-                : "RPC: VALVULA DESLIGADA"
-            );
+            Serial.println("RPC: modo manual ativado");
 
             enviarEstadoControle();
 
-        } else {
-
-            Serial.println(
-                "RPC: comando ignorado"
-            );
+            return;
         }
 
-        return;
+        // =========================
+        // MODO AUTOMÁTICO
+        // =========================
+
+        if (strcmp(metodo, "modoAutomatico") == 0) {
+
+            manualAtivo = false;
+            ligado = false;
+
+            digitalWrite(rele, LOW);
+
+            Serial.println("RPC: modo automatico ativado");
+            Serial.println("Valvula desligada.");
+
+            return;
+        }
+
+        // =========================
+        // LIGA/DESLIGA VÁLVULA
+        // =========================
+
+        if (strcmp(metodo, "toggleValvula") == 0) {
+
+            if (manualAtivo && !travado) {
+
+                ligado = !ligado;
+
+                Serial.println(
+                    ligado
+                    ? "RPC: VALVULA LIGADA"
+                    : "RPC: VALVULA DESLIGADA"
+                );
+
+                enviarEstadoControle();
+
+            } else {
+
+                Serial.println(
+                    "RPC: comando ignorado"
+                );
+            }
+
+            return;
+        }
     }
-}
+
+    // =========================
+    // ATRIBUTOS
+    // =========================
 
     JsonVariantConst raiz =
         documento.as<JsonVariantConst>();
 
-    // Resposta a uma solicitação de atributos:
-    // {"shared":{"periodos":[...]}}
-    //
-    // Atualização espontânea:
-    // {"periodos":[...]}
-
-    JsonVariantConst dados = raiz["shared"].is<JsonObjectConst>()
+    JsonVariantConst dados =
+        raiz["shared"].is<JsonObjectConst>()
         ? raiz["shared"]
         : raiz;
 
+    // =========================
+    // PERÍODOS
+    // =========================
+
     if (!dados["periodos"].isNull()) {
-        interpretarPeriodos(dados["periodos"]);
+
+        interpretarPeriodos(
+            dados["periodos"]
+        );
     }
+
+    // =========================
+    // TRAVAMENTO
+    // =========================
+
     if (dados["travado"].is<bool>()) {
-    travado = dados["travado"].as<bool>();
-}
+
+        travado =
+            dados["travado"].as<bool>();
+
+        Serial.print("travado recebido: ");
+        Serial.println(
+            travado ? "TRUE" : "FALSE"
+        );
+    }
+
+    // =========================
+    // MODO MANUAL/AUTOMÁTICO
+    // =========================
+
+    if (dados["manualAtivo"].is<bool>()) {
+
+        manualAtivo =
+            dados["manualAtivo"].as<bool>();
+
+        Serial.print("manualAtivo recebido: ");
+
+        Serial.println(
+            manualAtivo
+            ? "TRUE - MANUAL"
+            : "FALSE - AUTOMATICO"
+        );
+
+        // Ao receber automático pelo Shared Attribute,
+        // desliga imediatamente a válvula.
+        if (!manualAtivo) {
+
+            ligado = false;
+            digitalWrite(rele, LOW);
+
+            Serial.println(
+                "Modo automatico recebido."
+            );
+
+            Serial.println(
+                "Valvula desligada."
+            );
+        }
+    }
 }
 
 // -------- ENVIO MQTT --------
@@ -287,22 +368,6 @@ if (metodo != nullptr) {
 void enviarLedOnline() {
     String mensagem = "{\"ledOnline\":";
     mensagem += ledOnline ? "true" : "false";
-    mensagem += "}";
-
-    mqtt.publish(
-        "v1/devices/me/attributes",
-        mensagem.c_str()
-    );
-}
-
-void enviarEstadoControle() {
-
-    String mensagem = "{\"manualAtivo\":";
-    mensagem += manualAtivo ? "true" : "false";
-
-    mensagem += ",\"ligado\":";
-    mensagem += ligado ? "true" : "false";
-
     mensagem += "}";
 
     mqtt.publish(
@@ -390,15 +455,10 @@ void alternarManual() {
 
     manualAtivo = true;
 
-    // Inverte o estado REAL atual do relé
     ligado = !digitalRead(rele);
 
-    Serial.print("Modo manual: ");
-    Serial.println(
-        ligado
-        ? "VALVULA LIGADA"
-        : "VALVULA DESLIGADA"
-    );
+    Serial.println("Modo manual ativado.");
+
     enviarEstadoControle();
 }
 
@@ -419,12 +479,12 @@ void fBotao() {
     if (estadoBotao == HIGH && estadoBotaoAnterior == LOW) {
 
         alternarManual();
-
+        enviarEstadoControle();
         delay(50);  // debounce simples
     }
 
     estadoBotaoAnterior = estadoBotao;
-    enviarEstadoControle();
+  
 }
 
 // FUNCIONAMENTO DO LED
@@ -512,61 +572,113 @@ if (getLocalTime(&horario, 10000)) {
 
 void loop() {
 
+    // Tenta manter a conexão com o ThingsBoard
     conectarThingsBoard();
 
+    // Processa mensagens MQTT
     mqtt.loop();
 
-  struct tm horario;
 
-  // =============================
-  // PEGA HORA ATUAL
-  // =============================
+    // =====================================================
+    // O TRAVAMENTO SÓ VALE SE ESTIVER CONECTADO AO
+    // THINGSBOARD
+    // =====================================================
 
-  if (!getLocalTime(&horario)) {
+    bool travadoTB = mqtt.connected() && travado;
 
-    Serial.println("Erro ao obter horario!");
 
-    // Seguranca:
-    // se nao soubermos a hora,
-    // mantemos a irrigacao desligada
+    // =====================================================
+    // OBTÉM O HORÁRIO
+    // =====================================================
 
-    delay(1000);
+    struct tm horario;
 
-    return;
-  }
-
-  int hora = horario.tm_hour;
-  int minuto = horario.tm_min;
-
-  // Transforma horario em minutos
-
-  int horarioAtual = hora * 60 + minuto;
-
-// CONTROLE DO RELÉ
-fBotao();
-
-bool horarioAtivo = estaDentroDeAlgumPeriodo(horarioAtual);
-
-if (manualAtivo) {
-
-    // Botão físico tem prioridade
-    if (ligado && !travado) {
-        digitalWrite(rele, HIGH);
-    } else {
-        digitalWrite(rele, LOW);
+    if (!getLocalTime(&horario)) {
+        Serial.println("Falha ao obter horario");
+        return;
     }
-} else {
-    // Funcionamento automático
-    if (horarioAtivo && !travado) {
-        digitalWrite(rele, HIGH);
-    } else {
+
+    int hora = horario.tm_hour;
+    int minuto = horario.tm_min;
+
+    int horarioAtual = hora * 60 + minuto;
+
+
+    // =====================================================
+    // BOTÃO FÍSICO
+    // =====================================================
+
+    fBotao();
+
+
+    // =====================================================
+    // VERIFICA O HORÁRIO PROGRAMADO
+    // =====================================================
+
+    bool horarioAtivo =
+        estaDentroDeAlgumPeriodo(horarioAtual);
+
+
+    // =====================================================
+    // CONTROLE DA VÁLVULA
+    // =====================================================
+
+    if (travadoTB) {
+
+        // -------------------------------------------------
+        // TRAVADO PELO THINGSBOARD
+        // -------------------------------------------------
+
         digitalWrite(rele, LOW);
+        ligado = false;
+
     }
-}
+    else if (manualAtivo) {
 
-fLeds();
+        // -------------------------------------------------
+        // MODO MANUAL
+        // -------------------------------------------------
+        // Funciona mesmo sem internet.
 
-  delay(200);
+        if (ligado) {
+            digitalWrite(rele, HIGH);
+        }
+        else {
+            digitalWrite(rele, LOW);
+        }
+
+    }
+    else if (!configuracaoRecebida) {
+
+        // -------------------------------------------------
+        // AUTOMÁTICO SEM CONFIGURAÇÃO
+        // -------------------------------------------------
+
+        digitalWrite(rele, LOW);
+
+    }
+    else {
+
+        // -------------------------------------------------
+        // MODO AUTOMÁTICO
+        // -------------------------------------------------
+
+        if (horarioAtivo) {
+            digitalWrite(rele, HIGH);
+        }
+        else {
+            digitalWrite(rele, LOW);
+        }
+    }
+
+
+    // =====================================================
+    // LED / STATUS DA VÁLVULA
+    // =====================================================
+
+    fLeds();
+
+    delay(200);
 }
 
 // ADICIONAR MEDIDOR DE VAZÃO E PLUVIÔMETRO NO DASHBOARD MEDIDOR DE VAZÃO E PLUVIÔMETRO NO CÓDIGO
