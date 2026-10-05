@@ -668,6 +668,8 @@ void loop() {
         }
         else {
             digitalWrite(rele, LOW);
+             ligado=false;
+            enviarEstadoControle();
         }
     }
 
